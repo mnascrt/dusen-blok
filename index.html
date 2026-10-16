@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Düşen Blok</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    height: 100%;
+    background: #111;
+    color: #eee;
+    font-family: 'Courier New', monospace;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 6px;
+    touch-action: manipulation;
+  }
+  .wrap {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  .panel {
+    background: #1c1c1c;
+    border: 2px solid #333;
+    border-radius: 6px;
+    padding: 6px;
+    font-size: 12px;
+    min-width: 70px;
+  }
+  .panel h3 {
+    font-size: 10px;
+    color: #888;
+    margin-bottom: 2px;
+    letter-spacing: 1px;
+  }
+  .panel .val {
+    font-size: 16px;
+    color: #fff;
+    font-weight: bold;
+  }
+  #nextCanvas {
+    display: block;
+    margin-top: 4px;
+    background: #000;
+    border: 1px solid #333;
+  }
+  canvas#board {
+    background: #000;
+    border: 3px solid #444;
+    border-radius: 4px;
+    display: block;
+    box-shadow: 0 0 20px rgba(0,255,200,0.15);
+    touch-action: none;
+  }
+  .hint {
+    margin-top: 6px;
+    font-size: 10px;
+    color: #666;
+    text-align: center;
+    max-width: 320px;
+    line-height: 1.4;
+  }
+  .controls {
+    margin-top: 8px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    width: 100%;
+    max-width: 320px;
+  }
+  .btn {
+    background: #222;
+    border: 2px solid #444;
+    color: #eee;
+    font-size: 18px;
+    font-weight: bold;
+    padding: 10px 0;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .btn:active { background: #0a0; border-color: #0f0; }
+  .btn.rotate { background: #035; border-color: #08f; }
+  .btn.drop { background: #530; border-color: #f80; }
+  .mute {
+    margin-top: 8px;
+    width: 100%;
+    background: #222;
+    border: 2px solid #444;
+    color: #eee;
+    font-size: 18px;
+    padding: 4px 0;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.88);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    z-index: 10;
+    text-align: center;
+    padding: 20px;
+  }
+  .overlay.show { display: flex; }
+  .overlay h1 { font-size: 32px; color: #0f8; margin-bottom: 10px; }
+  .overlay p { font-size: 14px; margin-bottom: 16px; color: #ccc; max-width: 280px; line-height: 1.5; }
+  .overlay button {
+    background: #0a0;
+    color: #fff;
+    border: none;
+    padding: 14px 28px;
+    font-size: 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="panel">
+    <h3>SKOR</h3>
+    <div class="val" id="score">0</div>
+    <h3 style="margin-top:8px">SEVİYE</h3>
+    <div class="val" id="level">1</div>
+    <h3 style="margin-top:8px">SATIR</h3>
+    <div class="val" id="lines">0</div>
+  </div>
+
+  <canvas id="board"></canvas>
+
+  <div class="panel">
+    <h3>SONRAKİ</h3>
+    <canvas id="nextCanvas" width="70" height="70"></canvas>
+    <h3 style="margin-top:8px">MÜZİK</h3>
+    <button class="mute" id="btnMute">🔊</button>
+  </div>
+</div>
+
+<div class="hint">
+  👆 Dokun = Döndür &nbsp;•&nbsp; 👉 Sürükle = Kaydır &nbsp;•&nbsp; 👇 Aşağı çek = Hızlı indir
+</div>
+
+<div class="controls">
+  <button class="btn" id="btnLeft">◀</button>
+  <button class="btn" id="btnRight">▶</button>
+  <button class="btn rotate" id="btnRotate">⟳</button>
+  <button class="btn drop" id="btnDrop">⤓</button>
+</div>
+
+<div class="overlay" id="overlay">
+  <h1 id="ovTitle">DÜŞEN BLOK</h1>
+  <p id="ovText">Tahtaya dokunarak oyna<br>Döndür • Kaydır • Hızlı indir</p>
+  <button id="ovBtn">BAŞLA</button>
+</div>
+
+<script>
+// ============ MÜZİK (Korobeiniki — halk ezgisi, Web Audio ile sentezlenir) ============
+const Music = (() => {
+  let ac = null, master = null, timer = null;
+  let playing = false, muted = false, bpm = 150;
+  let step = 0, nextTime = 0;
+
+  // [MIDI nota, vuruş süresi]  (0 = sus)
+  const MEL = [
+    [76,1],[71,.5],[72,.5],[74,1],[72,.5],[71,.5],
+    [69,1],[69,.5],[72,.5],[76,1],[74,.5],[72,.5],
+    [71,1.5],[72,.5],[74,1],[76,1],
+    [72,1],[69,1],[69,2],
+    [0,.5],[74,1],[77,.5],[81,1],[79,.5],[77,.5],
+    [76,1.5],[72,.5],[76,1],[74,.5],[72,.5],
+    [71,1],[71,.5],[72,.5],[74,1],[76,1],
+    [72,1],[69,1],[69,1],[0,1]
+  ];
+  // Bas: her ölçüde kök nota, sekizlik oktav atlamalı
+  const ROOTS = [40,45,40,45,38,36,40,45];
+  const BASS = [];
+  ROOTS.forEach(r => { for (let i=0;i<8;i++) BASS.push([i%2 ? r+12 : r, .5]); });
+
+  const STEPS = 64; // 32 vuruş, sekizlik çözünürlük
+  function toSteps(seq) {
+    const arr = Array(STEPS).fill(null);
+    let s = 0;
+    for (const [m,b] of seq) { if (m) arr[s] = [m, b*2]; s += b*2; }
+    return arr;
+  }
+  const melSteps = toSteps(MEL), bassSteps = toSteps(BASS);
+  const freq = m => 440 * Math.pow(2, (m-69)/12);
+
+  function note(m, time, dur, type, vol) {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = type;
+    o.frequency.value = freq(m);
+    g.gain.setValueAtTime(0.0001, time);
+    g.gain.exponentialRampToValueAtTime(vol, time + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, time + dur);
+    o.connect(g); g.connect(master);
+    o.start(time); o.stop(time + dur + 0.02);
+  }
+
+  function schedule() {
+    while (nextTime < ac.currentTime + 0.12) {
+      const stepDur = 60 / bpm / 2;
+      const mel = melSteps[step], bass = bassSteps[step];
+      if (mel) note(mel[0], nextTime, mel[1]*stepDur*0.9, 'square', 0.09);
+      if (bass) note(bass[0], nextTime, bass[1]*stepDur*0.85, 'triangle', 0.22);
+      nextTime += stepDur;
+      step = (step + 1) % STEPS;
+    }
+  }
+
+  function start() {
+    if (!ac) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      ac = new AC();
+      master = ac.createGain();
+      master.connect(ac.destination);
+    }
+    ac.resume();
+    master.gain.setValueAtTime(muted ? 0 : 0.6, ac.currentTime);
+    stop();
+    playing = true;
+    step = 0;
+    nextTime = ac.currentTime + 0.05;
+    timer = setInterval(schedule, 25);
+  }
+  function stop() {
+    playing = false;
+    clearInterval(timer); timer = null;
+  }
+  // Seviye arttıkça tempo artar (150 → en fazla 280 BPM)
+  function setLevel(level) { bpm = Math.min(150 + (level-1)*13, 280); }
+  function toggleMute() {
+    muted = !muted;
+    if (master) master.gain.setValueAtTime(muted ? 0 : 0.6, ac.currentTime);
+    return muted;
+  }
+  // Uygulama arka plana geçince sustur
+  document.addEventListener('visibilitychange', () => {
+    if (!ac) return;
+    if (document.hidden) ac.suspend();
+    else if (playing) { ac.resume(); nextTime = ac.currentTime + 0.05; }
+  });
+  return { start, stop, setLevel, toggleMute };
+})();
+
+(() => {
+  const COLS = 10, ROWS = 20;
+  const board = document.getElementById('board');
+  const ctx = board.getContext('2d');
+  const nextCv = document.getElementById('nextCanvas');
+  const nctx = nextCv.getContext('2d');
+
+  // Ekran boyutuna göre blok boyutunu ayarla (mobil uyumlu)
+  function resizeBoard() {
+    const maxH = window.innerHeight - 180;
+    const maxW = window.innerWidth - 180;
+    const BLOCK = Math.floor(Math.min(maxH / ROWS, maxW / COLS));
+    const size = Math.max(16, Math.min(BLOCK, 28));
+    board.width = COLS * size;
+    board.height = ROWS * size;
+    return size;
+  }
+  let BLOCK = resizeBoard();
+  window.addEventListener('resize', () => { BLOCK = resizeBoard(); draw(); });
+
+  const scoreEl = document.getElementById('score');
+  const levelEl = document.getElementById('level');
+  const linesEl = document.getElementById('lines');
+  const overlay = document.getElementById('overlay');
+  const ovTitle = document.getElementById('ovTitle');
+  const ovText = document.getElementById('ovText');
+  const ovBtn = document.getElementById('ovBtn');
+
+  const SHAPES = {
+    I: { color:'#00f0f0', blocks:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]] },
+    O: { color:'#f0f000', blocks:[[1,1],[1,1]] },
+    T: { color:'#a000f0', blocks:[[0,1,0],[1,1,1],[0,0,0]] },
+    S: { color:'#00f000', blocks:[[0,1,1],[1,1,0],[0,0,0]] },
+    Z: { color:'#f00000', blocks:[[1,1,0],[0,1,1],[0,0,0]] },
+    J: { color:'#0000f0', blocks:[[1,0,0],[1,1,1],[0,0,0]] },
+    L: { color:'#f0a000', blocks:[[0,0,1],[1,1,1],[0,0,0]] }
+  };
+  const KEYS = Object.keys(SHAPES);
+
+  let grid, current, next, score, level, lines, dropCounter, dropInterval, lastTime, gameOver, running;
+
+  function newGrid() { return Array.from({length: ROWS}, () => Array(COLS).fill(null)); }
+  function randomPiece() {
+    const k = KEYS[Math.floor(Math.random()*KEYS.length)];
+    const s = SHAPES[k];
+    return {
+      type: k, color: s.color,
+      matrix: s.blocks.map(r => r.slice()),
+      x: Math.floor((COLS - s.blocks[0].length)/2), y: 0
+    };
+  }
+  function rotate(matrix) {
+    const N = matrix.length;
+    const res = Array.from({length:N}, () => Array(N).fill(0));
+    for (let y=0; y<N; y++)
+      for (let x=0; x<N; x++)
+        res[x][N-1-y] = matrix[y][x];
+    return res;
+  }
+  function collide(g, p) {
+    const m = p.matrix;
+    for (let y=0; y<m.length; y++) {
+      for (let x=0; x<m[y].length; x++) {
+        if (!m[y][x]) continue;
+        const nx = p.x + x, ny = p.y + y;
+        if (nx<0 || nx>=COLS || ny>=ROWS) return true;
+        if (ny>=0 && g[ny][nx]) return true;
+      }
+    }
+    return false;
+  }
+  function merge(g, p) {
+    p.matrix.forEach((row, y) => {
+      row.forEach((v, x) => {
+        const ny = p.y + y;
+        if (v && ny >= 0) g[ny][p.x + x] = p.color;
+      });
+    });
+  }
+  function clearLines() {
+    let cleared = 0;
+    outer: for (let y=ROWS-1; y>=0; y--) {
+      for (let x=0; x<COLS; x++) if (!grid[y][x]) continue outer;
+      grid.splice(y,1);
+      grid.unshift(Array(COLS).fill(null));
+      cleared++;
+      y++;
+    }
+    if (cleared > 0) {
+      score += [0, 40, 100, 300, 1200][cleared] * level;
+      lines += cleared;
+      const newLevel = Math.floor(lines/10) + 1;
+      if (newLevel !== level) {
+        level = newLevel;
+        dropInterval = Math.max(80, 1000 - (level-1)*80);
+        Music.setLevel(level);
+      }
+      updateUI();
+    }
+  }
+  function updateUI() {
+    scoreEl.textContent = score;
+    levelEl.textContent = level;
+    linesEl.textContent = lines;
+  }
+
+  function drawBlock(c, x, y, color, size=BLOCK) {
+    c.fillStyle = color;
+    c.fillRect(x*size, y*size, size, size);
+    c.fillStyle = 'rgba(255,255,255,0.25)';
+    c.fillRect(x*size, y*size, size, size/6);
+    c.fillRect(x*size, y*size, size/6, size);
+    c.fillStyle = 'rgba(0,0,0,0.35)';
+    c.fillRect(x*size, y*size + size - size/6, size, size/6);
+    c.fillRect(x*size + size - size/6, y*size, size/6, size);
+    c.strokeStyle = 'rgba(0,0,0,0.6)';
+    c.lineWidth = 1;
+    c.strokeRect(x*size+0.5, y*size+0.5, size-1, size-1);
+  }
+
+  function drawGhost() {
+    const ghost = { ...current, x: current.x, y: current.y };
+    while (!collide(grid, { ...ghost, y: ghost.y+1 })) ghost.y++;
+    ctx.globalAlpha = 0.22;
+    ghost.matrix.forEach((row, y) => {
+      row.forEach((v, x) => {
+        if (v) drawBlock(ctx, ghost.x+x, ghost.y+y, current.color);
+      });
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  function draw() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0,0,board.width,board.height);
+    ctx.strokeStyle = '#111';
+    ctx.lineWidth = 1;
+    for (let x=1; x<COLS; x++) {
+      ctx.beginPath();
+      ctx.moveTo(x*BLOCK, 0);
+      ctx.lineTo(x*BLOCK, board.height);
+      ctx.stroke();
+    }
+    for (let y=1; y<ROWS; y++) {
+      ctx.beginPath();
+      ctx.moveTo(0, y*BLOCK);
+      ctx.lineTo(board.width, y*BLOCK);
+      ctx.stroke();
+    }
+    for (let y=0; y<ROWS; y++)
+      for (let x=0; x<COLS; x++)
+        if (grid[y][x]) drawBlock(ctx, x, y, grid[y][x]);
+
+    if (current) {
+      drawGhost();
+      current.matrix.forEach((row, y) => {
+        row.forEach((v, x) => {
+          if (v) drawBlock(ctx, current.x+x, current.y+y, current.color);
+        });
+      });
+    }
+
+    nctx.fillStyle = '#000';
+    nctx.fillRect(0,0,nextCv.width,nextCv.height);
+    if (next) {
+      const size = 15;
+      const m = next.matrix;
+      let minX=m[0].length, maxX=0, minY=m.length, maxY=0;
+      for (let y=0; y<m.length; y++)
+        for (let x=0; x<m[y].length; x++)
+          if (m[y][x]) { minX=Math.min(minX,x); maxX=Math.max(maxX,x); minY=Math.min(minY,y); maxY=Math.max(maxY,y); }
+      const w = (maxX-minX+1)*size;
+      const h = (maxY-minY+1)*size;
+      const ox = (nextCv.width - w)/2 - minX*size;
+      const oy = (nextCv.height - h)/2 - minY*size;
+      for (let y=0; y<m.length; y++)
+        for (let x=0; x<m[y].length; x++)
+          if (m[y][x]) {
+            const px = ox + x*size, py = oy + y*size;
+            nctx.fillStyle = next.color;
+            nctx.fillRect(px, py, size, size);
+            nctx.strokeStyle = 'rgba(0,0,0,0.6)';
+            nctx.strokeRect(px+0.5, py+0.5, size-1, size-1);
+          }
+    }
+  }
+
+  function drop() {
+    current.y++;
+    if (collide(grid, current)) {
+      current.y--;
+      merge(grid, current);
+      clearLines();
+      spawn();
+    }
+    dropCounter = 0;
+  }
+  function hardDrop() {
+    let dist = 0;
+    while (!collide(grid, { ...current, y: current.y+1 })) {
+      current.y++;
+      dist++;
+    }
+    score += dist * 2;
+    merge(grid, current);
+    clearLines();
+    spawn();
+    updateUI();
+    dropCounter = 0;
+  }
+  function move(dir) {
+    current.x += dir;
+    if (collide(grid, current)) current.x -= dir;
+  }
+  function tryRotate() {
+    const orig = current.matrix;
+    current.matrix = rotate(current.matrix);
+    const kicks = [0, -1, 1, -2, 2];
+    for (const k of kicks) {
+      current.x += k;
+      if (!collide(grid, current)) return;
+      current.x -= k;
+    }
+    current.matrix = orig;
+  }
+  function spawn() {
+    current = next;
+    next = randomPiece();
+    if (collide(grid, current)) {
+      gameOver = true;
+      running = false;
+      Music.stop();
+      showOverlay('OYUN BİTTİ', `Skor: ${score} • Seviye: ${level}`, 'TEKRAR OYNA');
+    }
+  }
+
+  function loop(time=0) {
+    if (!running) return;
+    const delta = time - lastTime;
+    lastTime = time;
+    dropCounter += delta;
+    if (dropCounter > dropInterval) drop();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function startGame() {
+    grid = newGrid();
+    score = 0; level = 1; lines = 0;
+    dropCounter = 0;
+    dropInterval = 1000;
+    lastTime = 0;
+    gameOver = false;
+    running = true;
+    next = randomPiece();
+    spawn();
+    updateUI();
+    hideOverlay();
+    Music.setLevel(1);
+    Music.start();
+    requestAnimationFrame(loop);
+  }
+
+  function showOverlay(title, text, btn) {
+    ovTitle.textContent = title;
+    ovText.innerHTML = text;
+    ovBtn.textContent = btn;
+    overlay.classList.add('show');
+  }
+  function hideOverlay() { overlay.classList.remove('show'); }
+
+  // ============ JEST KONTROLLERİ (TAHTA ÜZERİNDE) ============
+  let touch = null;
+
+  board.addEventListener('touchstart', (e) => {
+    if (!running) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const rect = board.getBoundingClientRect();
+    touch = {
+      startX: t.clientX,
+      startY: t.clientY,
+      lastX: t.clientX,
+      colAtStart: t.clientX - rect.left,
+      time: Date.now(),
+      moved: false,
+      horizontalSteps: 0,
+      verticalMoved: false
+    };
+  }, {passive:false});
+
+  board.addEventListener('touchmove', (e) => {
+    if (!running || !touch) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const dx = t.clientX - touch.lastX;
+    const dy = t.clientY - touch.startY;
+    const totalDx = t.clientX - touch.startX;
+    const totalDy = t.clientY - touch.startY;
+
+    // Yatay kaydırma: her BLOCK pikselde bir adım
+    if (Math.abs(totalDx) > BLOCK * 0.6) {
+      const steps = Math.round(totalDx / BLOCK);
+      const diff = steps - touch.horizontalSteps;
+      if (diff !== 0) {
+        move(diff);
+        touch.horizontalSteps = steps;
+        touch.moved = true;
+      }
+    }
+
+    // Dikey aşağı hızlı çekme → hard drop (eğer yeterince çekildiyse)
+    if (totalDy > BLOCK * 3 && totalDy > Math.abs(totalDx) * 1.5 && !touch.verticalMoved) {
+      hardDrop();
+      touch.verticalMoved = true;
+      touch.moved = true;
+      touch = null; // işlem bitti, touchend'de tekrar işlem yapma
+    }
+
+    touch.lastX = t.clientX;
+  }, {passive:false});
+
+  board.addEventListener('touchend', (e) => {
+    if (!running || !touch) { touch = null; return; }
+    e.preventDefault();
+    const dt = Date.now() - touch.time;
+    const totalDx = (e.changedTouches[0].clientX) - touch.startX;
+    const totalDy = (e.changedTouches[0].clientY) - touch.startY;
+
+    // Hareket yoksa VE kısa dokunuşsa → döndür
+    if (!touch.moved && dt < 300 && Math.abs(totalDx) < 15 && Math.abs(totalDy) < 15) {
+      tryRotate();
+    }
+    touch = null;
+  }, {passive:false});
+
+  board.addEventListener('touchcancel', () => { touch = null; });
+
+  // ============ ALT BUTONLAR (yedek kontrol) ============
+  function bindHold(el, fn) {
+    let interval = null;
+    const start = (e) => {
+      e.preventDefault();
+      if (!running) return;
+      fn();
+      clearInterval(interval);
+      interval = setInterval(fn, 110);
+    };
+    const stop = () => { clearInterval(interval); interval = null; };
+    el.addEventListener('touchstart', start, {passive:false});
+    el.addEventListener('touchend', stop);
+    el.addEventListener('touchcancel', stop);
+    el.addEventListener('mousedown', start);
+    el.addEventListener('mouseup', stop);
+    el.addEventListener('mouseleave', stop);
+  }
+  function bindTap(el, fn) {
+    const h = (e) => { e.preventDefault(); if (running) fn(); };
+    el.addEventListener('touchstart', h, {passive:false});
+    el.addEventListener('mousedown', h);
+  }
+
+  bindHold(document.getElementById('btnLeft'), () => move(-1));
+  bindHold(document.getElementById('btnRight'), () => move(1));
+  bindTap(document.getElementById('btnRotate'), tryRotate);
+  bindTap(document.getElementById('btnDrop'), hardDrop);
+
+  // Klavye (bilgisayar için)
+  document.addEventListener('keydown', (e) => {
+    if (!running) return;
+    switch(e.key) {
+      case 'ArrowLeft': move(-1); break;
+      case 'ArrowRight': move(1); break;
+      case 'ArrowDown': drop(); score += 1; updateUI(); break;
+      case 'ArrowUp': case 'x': case 'X': tryRotate(); break;
+      case ' ': e.preventDefault(); hardDrop(); break;
+    }
+  });
+
+  const btnMute = document.getElementById('btnMute');
+  const toggleMute = () => { btnMute.textContent = Music.toggleMute() ? '🔇' : '🔊'; };
+  btnMute.addEventListener('click', toggleMute);
+  document.addEventListener('keydown', (e) => { if (e.key === 'm' || e.key === 'M') toggleMute(); });
+
+  ovBtn.addEventListener('click', startGame);
+  ovBtn.addEventListener('touchstart', (e)=>{e.preventDefault(); startGame();}, {passive:false});
+
+  grid = newGrid();
+  draw();
+  showOverlay('DÜŞEN BLOK', '👆 Dokun = Döndür<br>👉 Sürükle = Kaydır<br>👇 Aşağı çek = Hızlı indir', 'BAŞLA');
+})();
+</script>
+</body>
+</html>
